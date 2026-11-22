@@ -20,10 +20,10 @@ Aplikację instaluje się bezpośrednio na telewizorze przez aplikację **Downlo
 | --- | --- |
 | Google TV Streamer (lub inne urządzenie z Google TV) | |
 | Aplikacja **Downloader by AFTVnews** na telewizorze | Sklep Google Play na telewizorze |
-| Plik **TizenTube-Android-32bit.apk** (moja wersja) | https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube-Android-32bit.apk |
+| Plik **TizenTube-Android-32bit.apk** (moja wersja) | https://github.com/PiotrRebisz/tizentv/releases/download/android/TizenTube-Android-32bit.apk |
 | (opcjonalnie) Aplikacja **Remote ADB Shell** na telefon | Sklep Google Play na telefonie |
 
-Wszystkie pliki z mojej wersji są też na stronie wydań: https://github.com/PiotrRebisz/tizentv/releases/latest
+Plik jest też na stronie wydania: https://github.com/PiotrRebisz/tizentv/releases/tag/android
 
 > **Ważne:** Google TV Streamer potrzebuje wersji **32-bit**. Wersja 64-bit (`arm64`) kończy się komunikatem *„Aplikacja jest niezgodna z Twoim telewizorem”*.
 
@@ -70,7 +70,7 @@ Kolejne aktualizacje mojej wersji instalują się już bez odinstalowywania.
 2. W polu adresu wpisz:
 
    ```
-   https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube-Android-32bit.apk
+   https://github.com/PiotrRebisz/tizentv/releases/download/android/TizenTube-Android-32bit.apk
    ```
 
    i wybierz **Go**.

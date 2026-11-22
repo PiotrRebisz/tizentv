@@ -22,10 +22,10 @@ Instalacja odbywa się **z telefonu z Androidem**, bez komputera.
 | Telefon z Androidem w **tej samej sieci Wi-Fi** co telewizor | |
 | Darmowe konto Samsung (do podpisania aplikacji, wymagane od Tizen 7) | https://account.samsung.com |
 | Aplikacja **Apps2Samsung** na telefon | https://github.com/Apps2Samsung/Apps2Samsung/releases |
-| Paczka **TizenTube.wgt** | https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube.wgt |
-| Paczka **TizenTube-Start.wgt** | https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube-Start.wgt |
+| Paczka **TizenTube.wgt** | https://github.com/PiotrRebisz/tizentv/releases/download/samsung/TizenTube.wgt |
+| Paczka **TizenTube-Start.wgt** | https://github.com/PiotrRebisz/tizentv/releases/download/samsung/TizenTube-Start.wgt |
 
-Wszystkie pliki z mojej wersji są też na stronie wydań: https://github.com/PiotrRebisz/tizentv/releases/latest
+Oba pliki są też na stronie wydania: https://github.com/PiotrRebisz/tizentv/releases/tag/samsung
 
 > **Dlaczego dwie paczki?** **TizenTube** to sama aplikacja. **TizenTube Start** to program uruchamiający: najpierw włącza usługę TizenTube w tle, a potem otwiera aplikację. Na tym telewizorze TizenTube uruchamiany bezpośrednio często pokazuje błąd sieci, dlatego na co dzień otwiera się **TizenTube Start**.
 
@@ -73,8 +73,8 @@ Sprawdź też adres IP telewizora: **Ustawienia → Ogólne (lub Połączenie) �
 
 Na telefonie pobierz oba pliki:
 
-- **TizenTube.wgt**: https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube.wgt
-- **TizenTube-Start.wgt**: https://github.com/PiotrRebisz/tizentv/releases/latest/download/TizenTube-Start.wgt
+- **TizenTube.wgt**: https://github.com/PiotrRebisz/tizentv/releases/download/samsung/TizenTube.wgt
+- **TizenTube-Start.wgt**: https://github.com/PiotrRebisz/tizentv/releases/download/samsung/TizenTube-Start.wgt
 
 Trafią do folderu **Pobrane**.
 
