@@ -9,8 +9,8 @@ Moja wersja **TizenTube** (YouTube bez reklam na telewizorze) z dodatkami: przyc
 
 ## Pliki do pobrania
 
-- Samsung: https://github.com/PiotrRebisz/tizentv/releases/tag/samsung
-- Google TV / Android TV: https://github.com/PiotrRebisz/tizentv/releases/tag/android
+- Samsung: https://github.com/PiotrRebisz/tizentv/releases/tag/Samsung
+- Google TV / Android TV: https://github.com/PiotrRebisz/tizentv/releases/tag/Android
 
 | Plik | Dla |
 | --- | --- |
@@ -21,6 +21,6 @@ Moja wersja **TizenTube** (YouTube bez reklam na telewizorze) z dodatkami: przyc
 
 ### Dla właściciela: nowa wersja plików
 
-Wydania mają stałe tagi `samsung` i `android`, dzięki czemu linki w instrukcjach się nie zmieniają. Przy nowej wersji edytuj wydanie (**Edit**), usuń stary plik i dodaj nowy **o tej samej nazwie**.
+Wydania mają stałe tagi `Samsung` i `Android`, dzięki czemu linki w instrukcjach się nie zmieniają. Przy nowej wersji edytuj wydanie (**Edit**), usuń stary plik i dodaj nowy **o tej samej nazwie**.
 
 Oparte na [TizenTube](https://github.com/reisxd/TizenTube) i [TizenTube Cobalt](https://github.com/reisxd/TizenTubeCobalt) autorstwa reisxd.
