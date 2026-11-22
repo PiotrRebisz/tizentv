@@ -114,12 +114,12 @@ Przydaje się do zmian, których nie ma w menu Google TV, np. czasu wygaszacza e
 
 1. **Ustawienia → System → Opcje programisty**.
 2. Włącz **Debugowanie USB**. Jeśli jest pozycja **Debugowanie bezprzewodowe**, włącz ją też.
-3. Sprawdź adres IP telewizora: **Ustawienia → Sieć i internet → (Twoja sieć)**, np. `192.168.86.102`.
+3. Sprawdź adres IP telewizora: **Ustawienia → Sieć i internet → (Twoja sieć)**, np. `192.168.1.20`.
 
 ### Na telefonie
 
 1. Zainstaluj **Remote ADB Shell** ze Sklepu Google Play: https://play.google.com/store/search?q=Remote%20ADB%20Shell&c=apps
-2. Dodaj urządzenie: adres IP telewizora i port **5555** (np. `192.168.86.102:5555`).
+2. Dodaj urządzenie: adres IP telewizora i port **5555** (np. `192.168.1.20:5555`).
 3. Na telewizorze pojawi się pytanie o zezwolenie na debugowanie: zaznacz **Zawsze zezwalaj z tego komputera** i wybierz **OK**.
 4. Otwórz terminal (**Launch ADB Terminal Console**) i wpisuj polecenia **bez** przedrostka `adb shell`.
 

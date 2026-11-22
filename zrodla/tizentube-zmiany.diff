@@ -1,0 +1,1169 @@
+diff --git a/mods/config.js b/mods/config.js
+index 07d9bdf..557607c 100644
+--- a/mods/config.js
++++ b/mods/config.js
+@@ -38,6 +38,14 @@ const defaultConfig = {
+   enableSuperThanksButton: false,
+   enableAIAskButton: false,
+   enableSpeedControlsButton: true,
++  enableScreenOffButton: true,
++  enableAudioButton: true,
++  ttAudioIconType: null,
++  enableQualityButton: true,
++  ttQualityIconType: null,
++  enableLocalUpdateNotice: true,
++  ttUpdateAckSig: '',
++  ttUpdateRemindAt: 0,
+   enablePatchingVideoPlayer: true,
+   enableMPButton: true,
+   enableSwapMPWithPIP: false,
+@@ -71,6 +79,9 @@ const defaultConfig = {
+   disableEnlargingThumbnails: false,
+   enableShrinkingThumbnails: false,
+   hideRelatedVideosPlayer: false,
++  enableAutoPlayAfterSeek: true,
++  enablePauseOnFirstOk: true,
++  enableScreenOffPassKeys: true,
+ };
+ 
+ let localConfig;
+diff --git a/mods/features/autoPlayAfterSeek.js b/mods/features/autoPlayAfterSeek.js
+new file mode 100644
+index 0000000..15efad0
+--- /dev/null
++++ b/mods/features/autoPlayAfterSeek.js
+@@ -0,0 +1,115 @@
++// Odtwarzanie po przewinieciu (jak w SmartTube): gdy film gral, a uzytkownik przewija go strzalkami
++// lewo/prawo (albo przyciskami przewijania na pilocie), po chwili bez naciskania film sam rusza
++// od nowego miejsca, bez naciskania Play.
++
++import { configRead } from '../config.js';
++
++const SEEK_KEYS = [37, 39, 412, 417]; // lewo, prawo, przewin do tylu, przewin do przodu
++const DELAY_MS = 1000;
++
++let timer = null;
++let wasPlaying = false;
++let startTime = null;
++
++function getPlayer() {
++    return document.querySelector('.html5-video-player');
++}
++
++function isWatchPage() {
++    return window.location.href.indexOf('watch') !== -1;
++}
++
++function isPlaying(player) {
++    try {
++        const state = player.getPlayerStateObject();
++        return !!(state && state.isPlaying);
++    } catch (e) {
++        const video = document.querySelector('video');
++        return !!(video && !video.paused);
++    }
++}
++
++function currentTime(player) {
++    try {
++        if (player.getCurrentTime) return player.getCurrentTime();
++    } catch (e) { }
++    const video = document.querySelector('video');
++    return video ? video.currentTime : null;
++}
++
++function pressEnter() {
++    const target = document.activeElement || document.body;
++    for (const type of ['keydown', 'keyup']) {
++        const evt = new KeyboardEvent(type, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true });
++        try {
++            if (evt.keyCode !== 13) {
++                Object.defineProperty(evt, 'keyCode', { get: () => 13 });
++                Object.defineProperty(evt, 'which', { get: () => 13 });
++            }
++        } catch (e) { }
++        // Znacznik naszego wlasnego OK (Cobalt nie obsluguje isTrusted, wiec nie mozna na nim polegac).
++        evt.__ttSynthetic = true;
++        target.dispatchEvent(evt);
++    }
++}
++
++export function cancelAutoPlayAfterSeek() {
++    reset();
++}
++
++function reset() {
++    if (timer) clearTimeout(timer);
++    timer = null;
++    wasPlaying = false;
++    startTime = null;
++}
++
++function resumeIfNeeded() {
++    timer = null;
++    const player = getPlayer();
++    const shouldResume = wasPlaying;
++    const before = startTime;
++    wasPlaying = false;
++    startTime = null;
++    if (!shouldResume || !player || !isWatchPage() || isPlaying(player)) return;
++
++    const now = currentTime(player);
++    const moved = before !== null && now !== null && Math.abs(now - before) > 0.5;
++    if (moved) {
++        // Przewiniecie juz sie wykonalo, film tylko stoi: wznawiamy.
++        try {
++            if (player.playVideo) player.playVideo();
++            else document.querySelector('video').play();
++        } catch (e) {
++            pressEnter();
++        }
++    } else {
++        // Przewiniecie czeka na potwierdzenie: potwierdzamy tak, jak zrobilby to przycisk OK.
++        pressEnter();
++    }
++}
++
++function onKeyDown(evt) {
++    if (!configRead('enableAutoPlayAfterSeek')) return;
++    if (evt.__ttSynthetic) return; // nasze wlasne OK
++
++    if (SEEK_KEYS.indexOf(evt.keyCode) === -1) {
++        // Inny klawisz (OK, Wstecz, itp.): uzytkownik sam decyduje, nic nie wznawiamy.
++        if (timer) reset();
++        return;
++    }
++    if (!isWatchPage()) return;
++    const player = getPlayer();
++    if (!player) return;
++
++    if (!timer) {
++        // Poczatek przewijania: zapamietaj, czy film gral i gdzie byl.
++        wasPlaying = isPlaying(player);
++        startTime = currentTime(player);
++    } else {
++        clearTimeout(timer);
++    }
++    timer = setTimeout(resumeIfNeeded, DELAY_MS);
++}
++
++document.addEventListener('keydown', onKeyDown, true);
+diff --git a/mods/features/localUpdateNotice.js b/mods/features/localUpdateNotice.js
+new file mode 100644
+index 0000000..d1c5372
+--- /dev/null
++++ b/mods/features/localUpdateNotice.js
+@@ -0,0 +1,115 @@
++// Powiadomienie o nowej wersji TizenTube dla wersji zbudowanej lokalnie (z przyciskami na pasku).
++// Ta wersja ma skrypt wbudowany w paczke, wiec nie aktualizuje sie sama. Raz przy starcie
++// sprawdzamy, czy autor TizenTube wydal nowszy skrypt albo nowsza aplikacje, i pokazujemy komunikat.
++
++import { buttonItem, showModal, showToast, overlayPanelItemListRenderer, overlayMessageRenderer } from '../ui/ytUI.js';
++import { configRead } from '../config.js';
++import { t } from 'i18next';
++
++// Na Androidzie (TizenTube Cobalt) jest obiekt h5vcc.tizentube, na Samsungu go nie ma.
++export const IS_ANDROID = !!(window.h5vcc && window.h5vcc.tizentube);
++
++// Wersje, z ktorych zbudowano te paczke.
++export const LOCAL_BASE = {
++    script: '1.15.2',                                         // @foxreis/tizentube (userScript)
++    app: IS_ANDROID ? '2.0.3' : '2.1.1',                      // wersja aplikacji, na ktorej oparto paczke
++    appRepo: IS_ANDROID ? 'reisxd/TizenTubeCobalt' : 'reisxd/TizenTube'
++};
++
++function compareVersions(a, b) {
++    const pa = String(a).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
++    const pb = String(b).replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
++    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
++        const d = (pa[i] || 0) - (pb[i] || 0);
++        if (d !== 0) return d;
++    }
++    return 0;
++}
++
++function fetchJson(url) {
++    return fetch(url, { cache: 'no-store' }).then(r => {
++        if (!r.ok) throw new Error('HTTP ' + r.status);
++        return r.json();
++    });
++}
++
++function getLatestScriptVersion() {
++    return fetchJson('https://registry.npmjs.org/@foxreis/tizentube/latest')
++        .then(j => j.version)
++        .catch(() => fetchJson('https://data.jsdelivr.com/v1/packages/npm/@foxreis/tizentube/resolved').then(j => j.version));
++}
++
++function getLatestAppVersion() {
++    return fetchJson('https://api.github.com/repos/' + LOCAL_BASE.appRepo + '/releases/latest')
++        .then(j => String(j.tag_name || '').replace(/^v/, ''));
++}
++
++export function checkLocalUpdates(manual) {
++    return Promise.all([
++        getLatestScriptVersion().catch(() => null),
++        getLatestAppVersion().catch(() => null)
++    ]).then(([script, app]) => {
++        if (!script && !app) {
++            if (manual) showToast(t('localUpdate.checkFailed.title'), t('localUpdate.checkFailed.subtitle'));
++            return;
++        }
++        const lines = [];
++        if (script && compareVersions(script, LOCAL_BASE.script) > 0) {
++            lines.push(t('localUpdate.scriptLine', { from: LOCAL_BASE.script, to: script }));
++        }
++        if (app && compareVersions(app, LOCAL_BASE.app) > 0) {
++            lines.push(t('localUpdate.appLine', { from: LOCAL_BASE.app, to: app }));
++        }
++
++        if (lines.length === 0) {
++            if (manual) showToast(t('localUpdate.upToDate.title'), t('localUpdate.upToDate.subtitle'));
++            return;
++        }
++
++        const signature = `s${script || ''}|a${app || ''}`;
++        if (!manual && configRead('ttUpdateAckSig') === signature) return;
++
++        const now = Math.floor(Date.now() / 1000);
++        const buttons = [
++            buttonItem(
++                { title: t('localUpdate.ok.title'), subtitle: t('localUpdate.ok.subtitle') },
++                { icon: 'CHECK_BOX' },
++                [
++                    { customAction: { action: 'TT_LOCAL_UPDATE_ACK', parameters: signature } },
++                    { signalAction: { signal: 'POPUP_BACK' } }
++                ]
++            ),
++            buttonItem(
++                { title: t('localUpdate.later.title'), subtitle: t('localUpdate.later.subtitle') },
++                { icon: 'SEARCH_HISTORY' },
++                [
++                    { customAction: { action: 'TT_LOCAL_UPDATE_LATER', parameters: now + 86400 } },
++                    { signalAction: { signal: 'POPUP_BACK' } }
++                ]
++            )
++        ];
++        // Pusty komunikat, zeby styl nie rozjezdzal sie po nacisnieciu przycisku (jak w oryginalnym updaterze).
++        buttons.push(overlayMessageRenderer(' '));
++        buttons.push(overlayMessageRenderer(lines.join('\n') + '\n\n' + t(IS_ANDROID ? 'localUpdate.explainAndroid' : 'localUpdate.explain')));
++
++        showModal(
++            {
++                title: t('localUpdate.available.title'),
++                subtitle: t('localUpdate.available.subtitle')
++            },
++            overlayPanelItemListRenderer(buttons),
++            'tt-local-update-modal',
++            false
++        );
++    });
++}
++
++// Automatyczne sprawdzenie raz po starcie (z opoznieniem, zeby nie przeszkadzac w ladowaniu strony).
++setTimeout(() => {
++    try {
++        if (!configRead('enableLocalUpdateNotice')) return;
++        const now = Math.floor(Date.now() / 1000);
++        if ((configRead('ttUpdateRemindAt') || 0) > now) return;
++        checkLocalUpdates(false).catch(() => { });
++    } catch (e) { }
++}, 15000);
+diff --git a/mods/features/pauseOnFirstOk.js b/mods/features/pauseOnFirstOk.js
+new file mode 100644
+index 0000000..37ffb6e
+--- /dev/null
++++ b/mods/features/pauseOnFirstOk.js
+@@ -0,0 +1,116 @@
++// Pauza jednym OK (jak w SmartTube): gdy film gra, a pasek odtwarzacza jest schowany, pierwsze
++// nacisniecie OK od razu zatrzymuje film (zamiast tylko pokazywac pasek).
++// Gdy pasek jest widoczny, OK dziala normalnie (na przycisk, ktory ma fokus).
++
++import { configRead } from '../config.js';
++import { showToast } from '../ui/ytUI.js';
++import { cancelAutoPlayAfterSeek } from './autoPlayAfterSeek.js';
++
++let swallowUntil = 0;
++let keySeq = 0; // licznik nacisniec, zeby zapasowa pauza nie zadzialala po kolejnym klawiszu
++
++function getPlayer() {
++    return document.querySelector('.html5-video-player');
++}
++
++function isWatchPage() {
++    return window.location.href.indexOf('watch') !== -1;
++}
++
++function isPlaying(player) {
++    try {
++        const state = player.getPlayerStateObject();
++        return !!(state && state.isPlaying);
++    } catch (e) {
++        const video = document.querySelector('video');
++        return !!(video && !video.paused);
++    }
++}
++
++// Stan paska: ytlr-watch-default ma hybridnavfocusable="true", gdy pasek jest schowany
++// (z tego korzysta zegar TizenTube), a ytlr-progress-bar ma "false" (z tego korzysta SponsorBlock).
++function overlayState() {
++    const watch = document.querySelector('ytlr-watch-default');
++    const bar = document.querySelector('ytlr-progress-bar');
++    const active = document.activeElement;
++    return {
++        watch: watch ? watch.getAttribute('hybridnavfocusable') : 'brak',
++        bar: bar ? bar.getAttribute('hybridnavfocusable') : 'brak',
++        // Fokus na samym ytlr-watch-default (a nie na przycisku paska) tez oznacza schowany pasek.
++        focusOnWatch: !!(watch && active && active === watch)
++    };
++}
++
++export function controlsHidden(state) {
++    const s = state || overlayState();
++    if (s.focusOnWatch) return true;
++    if (s.watch === 'brak' && s.bar === 'brak') return false;
++    const watchHidden = s.watch === 'brak' || s.watch === 'true';
++    const barHidden = s.bar === 'brak' || s.bar === 'false';
++    return watchHidden && barHidden;
++}
++
++function pause(player) {
++    try {
++        if (player.pauseVideo) player.pauseVideo();
++        else document.querySelector('video').pause();
++    } catch (e) {
++        try { document.querySelector('video').pause(); } catch (e2) { }
++    }
++    // Zapas: gdyby odtwarzacz nie zareagowal, zatrzymaj sam element video
++    // (tylko jesli w miedzyczasie nie nacisnieto zadnego klawisza).
++    const seq = keySeq;
++    setTimeout(() => {
++        if (seq !== keySeq || !isPlaying(player)) return;
++        const video = document.querySelector('video');
++        try { if (video) video.pause(); } catch (e) { }
++        setTimeout(() => {
++            if (seq === keySeq && isPlaying(player)) showToast('Pauza jednym OK', 'Nie udało się zatrzymać filmu.');
++        }, 300);
++    }, 300);
++}
++
++function swallow(evt) {
++    evt.preventDefault();
++    evt.stopPropagation();
++    if (evt.stopImmediatePropagation) evt.stopImmediatePropagation();
++}
++
++function onKey(evt) {
++    // Nasze wlasne OK (z autoPlayAfterSeek) ma znacznik; isTrusted w Cobalt nie dziala.
++    if (evt.__ttSynthetic) return;
++    if (evt.type === 'keydown') keySeq++;
++    if (evt.keyCode !== 13) return;
++
++    if (evt.type !== 'keydown') {
++        // keyup/keypress tego samego nacisniecia tez nie moze dojsc do YouTube.
++        if (Date.now() < swallowUntil) {
++            if (evt.type === 'keyup') swallowUntil = 0;
++            swallow(evt);
++        }
++        return;
++    }
++
++    if (!configRead('enablePauseOnFirstOk')) return;
++    // Przy wylaczonym ekranie OK ma go wlaczyc (obsluga w ui/ui.js), wiec go nie przechwytujemy.
++    if (window.screenTurnedOffAt) return;
++    if (!isWatchPage()) return;
++    const player = getPlayer();
++    const playing = !!player && isPlaying(player);
++    const before = overlayState();
++    const hidden = controlsHidden(before);
++    if (!playing) return;
++
++    if (hidden) {
++        swallow(evt);
++        swallowUntil = Date.now() + 1500;
++        cancelAutoPlayAfterSeek();
++        pause(player);
++        return;
++    }
++}
++
++// window + faza przechwytywania: dostajemy klawisz, zanim trafi do YouTube.
++window.addEventListener('keydown', onKey, true);
++window.addEventListener('keypress', onKey, true);
++window.addEventListener('keyup', onKey, true);
+diff --git a/mods/features/updater.js b/mods/features/updater.js
+index 381fa71..b251206 100644
+--- a/mods/features/updater.js
++++ b/mods/features/updater.js
+@@ -7,7 +7,9 @@ import { t } from 'i18next';
+ // If TizenTube is not running on Cobalt, do nothing
+ // Add a timeout since reloading the home page while the updater pop up is shown causes the pop up to instantly disappear.
+ setTimeout(() => {
+-    if (window.h5vcc && window.h5vcc.tizentube && configRead('enableUpdater')) {
++    // Wersja lokalna: oficjalny aktualizator wylaczony, bo oficjalny APK ma inny podpis i nie zainstaluje sie
++    // na nasza wersje. O nowych wersjach informuje features/localUpdateNotice.js.
++    if (false && window.h5vcc && window.h5vcc.tizentube && configRead('enableUpdater')) {
+         const currentEpoch = Math.floor(Date.now() / 1000);
+         if (configRead('dontCheckUpdateUntil') > currentEpoch) {
+             console.info('Skipping update check until', new Date(configRead('dontCheckUpdateUntil') * 1000).toLocaleString());
+diff --git a/mods/resolveCommand.js b/mods/resolveCommand.js
+index 3d2d10d..ddd9818 100644
+--- a/mods/resolveCommand.js
++++ b/mods/resolveCommand.js
+@@ -4,6 +4,7 @@ import modernUI, { optionShow } from './ui/settings.js';
+ import { speedSettings } from './ui/speedUI.js';
+ import { showToast, buttonItem, showModal, QrCodeRenderer, overlayPanelItemListRenderer, overlayMessageRenderer } from './ui/ytUI.js';
+ import checkForUpdates from './features/updater.js';
++import { checkLocalUpdates } from './features/localUpdateNotice.js';
+ import { t } from 'i18next';
+ import { requestNextAndNavigateChannel, getFeedbackPanelTokens, sendFeedbackToken } from './utils/innerTubeCalls.js';
+ import qrcode from 'qrcode-npm';
+@@ -152,6 +153,39 @@ export function patchResolveCommand() {
+                             ])
+                         );
+                     }
++
++                    // Pozycje "Dzwiek" i "Jakosc": zapamietaj ich komendy i ikony (dla przyciskow na pasku),
++                    // a jesli to przycisk na pasku otworzyl to menu, od razu przejdz do wybranej pozycji.
++                    const ttItems = cmd.openPopupAction.popup.overlaySectionRenderer.overlay.overlayTwoPanelRenderer.actionPanel.overlayPanelRenderer.content.overlayPanelItemListRenderer.items;
++                    const ttFound = {};
++                    for (const kind in TT_SUBMENUS) {
++                        const found = findSubmenuItem(ttItems, TT_SUBMENUS[kind]);
++                        ttFound[kind] = found;
++                        if (found) {
++                            if (found.cmd) window['__ttCmd_' + kind] = found.cmd;
++                            const iconKey = TT_SUBMENUS[kind].iconKey;
++                            if (found.icon && configRead(iconKey) !== found.icon) configWrite(iconKey, found.icon);
++                        }
++                    }
++                    const pending = window.__ttSubmenuPending;
++                    if (pending && Date.now() - pending.at < 4000) {
++                        window.__ttSubmenuPending = null;
++                        const spec = TT_SUBMENUS[pending.kind];
++                        const found = ttFound[pending.kind];
++                        if (found && found.cmd) {
++                            // Tak jak uzytkownik: najpierw menu ustawien, potem wybrana pozycja.
++                            const subCmd = found.cmd;
++                            const opened = ogResolve.call(this, cmd, _);
++                            setTimeout(() => window._yttv[key].instance.resolveCommand(subCmd, _), 150);
++                            return opened;
++                        }
++                        if (found) {
++                            showToast(t(spec.titleKey), t(spec.unavailableKey));
++                        } else {
++                            showToast(t(spec.titleKey), t('player.submenu.notFound') + ' ' + describeItems(ttItems));
++                        }
++                        return true;
++                    }
+                 } else if (cmd?.watchEndpoint?.videoId) {
+                     window.isPipPlaying = false;
+                     const ytlrPlayerContainer = document.querySelector('ytlr-player-container');
+@@ -195,8 +229,99 @@ export function patchResolveCommand() {
+     }
+ }
+ 
++// ---- Przycisk "Dzwiek" na pasku odtwarzacza ----
++
++function rendererOf(item) {
++    if (!item || typeof item !== 'object') return null;
++    const key = Object.keys(item).find(k => /Renderer$/.test(k));
++    return key ? item[key] : null;
++}
++
++function textOf(text) {
++    if (!text) return '';
++    if (text.simpleText) return text.simpleText;
++    if (text.runs) return text.runs.map(r => r.text).join('');
++    return '';
++}
++
++function commandOf(renderer) {
++    if (!renderer) return null;
++    return renderer.serviceEndpoint || renderer.command || renderer.navigationEndpoint || renderer.onSelectCommand || null;
++}
++
++const TT_SUBMENUS = {
++    audio: {
++        iconRe: /AUDIO|VOLUME|SPEAKER|SOUND|HEADSET|HEADPHONE/i,
++        titleRe: /d\u017awi\u0119k|dzwiek|audio|sound|\u015bcie\u017ck/i,
++        iconKey: 'ttAudioIconType',
++        titleKey: 'player.audioSettings.title',
++        unavailableKey: 'player.audioSettings.unavailable'
++    },
++    quality: {
++        iconRe: /QUALITY|^HD$|^SETTINGS_HD|HIGH_DEFINITION/i,
++        titleRe: /jako\u015b\u0107|jakosc|quality/i,
++        iconKey: 'ttQualityIconType',
++        titleKey: 'player.qualitySettings.title',
++        unavailableKey: 'player.qualitySettings.unavailable'
++    }
++};
++
++function findSubmenuItem(items, spec) {
++    if (!Array.isArray(items)) return null;
++    for (const item of items) {
++        const r = rendererOf(item);
++        if (!r) continue;
++        const icon = r.icon && r.icon.iconType;
++        const title = textOf(r.title);
++        if ((icon && spec.iconRe.test(icon)) || spec.titleRe.test(title)) {
++            return { cmd: r.isDisabled ? null : commandOf(r), icon: icon || null, title };
++        }
++    }
++    return null;
++}
++
++function describeItems(items) {
++    if (!Array.isArray(items)) return '';
++    return items.map(item => {
++        const r = rendererOf(item);
++        return r ? `${(r.icon && r.icon.iconType) || '?'}:${textOf(r.title)}` : '?';
++    }).join(', ');
++}
++
++function openSubmenu(kind) {
++    const spec = TT_SUBMENUS[kind];
++    const gear = window.__ttPlaybackSettingsButton;
++    const gearCmd = gear ? commandOf(gear.button && gear.button.buttonRenderer ? gear.button.buttonRenderer : rendererOf(gear.button)) : null;
++    if (gearCmd) {
++        window.__ttSubmenuPending = { kind, at: Date.now() };
++        resolveCommand(gearCmd);
++        return;
++    }
++    if (window['__ttCmd_' + kind]) {
++        resolveCommand(window['__ttCmd_' + kind]);
++        return;
++    }
++    const keys = gear && gear.button ? Object.keys(gear.button.buttonRenderer || gear.button).join(',') : 'brak';
++    showToast(t(spec.titleKey), t('player.submenu.openOnce') + ' [' + keys + ']');
++}
++
+ function customAction(action, parameters) {
+     switch (action) {
++        case 'TT_AUDIO_SETTINGS':
++            openSubmenu('audio');
++            break;
++        case 'TT_QUALITY_SETTINGS':
++            openSubmenu('quality');
++            break;
++        case 'TT_LOCAL_UPDATE_ACK':
++            configWrite('ttUpdateAckSig', parameters);
++            break;
++        case 'TT_LOCAL_UPDATE_LATER':
++            configWrite('ttUpdateRemindAt', parameters);
++            break;
++        case 'TT_LOCAL_UPDATE_CHECK':
++            checkLocalUpdates(true);
++            break;
+         case 'SETTINGS_UPDATE':
+             modernUI(true, parameters);
+             break;
+diff --git a/mods/translations/resources/en.json b/mods/translations/resources/en.json
+index 741901a..25e246a 100644
+--- a/mods/translations/resources/en.json
++++ b/mods/translations/resources/en.json
+@@ -87,6 +87,9 @@
+                             "showSuperThxBtn": "Show Super Thanks Button",
+                             "showAIAskBtn": "Show Ask Button",
+                             "showSpeedCtrlBtn": "Show Speed Controls Button",
++                            "showScreenOffBtn": "Show Turn Off Screen Button",
++                            "showAudioBtn": "Show Audio Button",
++                            "showQualityBtn": "Show Quality Button",
+                             "addMPBtn": "Show Mini Player Button",
+                             "swapMPWithPIP": "Swap Mini Player Button with PiP Button"
+                         }
+@@ -110,7 +113,10 @@
+                     },
+                     "codecAny": "Any",
+                     "qualityAuto": "Auto",
+-                    "hideRelatedVideosPlayer": "Hide Related Videos"
++                    "hideRelatedVideosPlayer": "Hide Related Videos",
++                    "autoPlayAfterSeek": "Play After Seeking",
++                    "pauseOnFirstOk": "Pause With One OK Press",
++                    "screenOffPassKeys": "Volume and Seeking Keep Screen Off"
+                 }
+             },
+             "time": {
+@@ -295,6 +301,20 @@
+             "qrCodeScanMessage": "Scan the QR code below to share this video."
+         },
+         "screenOff": "Turn off screen",
++        "audioSettings": {
++            "title": "Audio",
++            "unavailable": "Audio settings are not available for this video.",
++            "notFound": "Audio item not found in the settings menu.",
++            "openOnce": "Open the settings menu (gear) once, then try again."
++        },
++        "qualitySettings": {
++            "title": "Quality",
++            "unavailable": "Quality settings are not available for this video."
++        },
++        "submenu": {
++            "notFound": "Item not found in the settings menu.",
++            "openOnce": "Open the settings menu (gear) once, then try again."
++        },
+         "chapters": {
+             "title": "Chapters",
+             "enterNudge": "To view chapters, press the up arrow button",
+@@ -328,5 +348,38 @@
+             "title": "Sidebar Contents Updated",
+             "subtitle": "The sidebar contents have been updated."
+         }
++    },
++    "localUpdate": {
++        "menu": {
++            "title": "TizenTube Updates",
++            "subtitle": "New version notifications",
++            "versionSubtitle": "Your version: script {{script}}, app {{app}}",
++            "checkNow": "Check now",
++            "checkOnStartup": "Check on startup"
++        },
++        "available": {
++            "title": "A new TizenTube version is available",
++            "subtitle": "Your custom build does not update itself"
++        },
++        "scriptLine": "TizenTube script: {{from}} → {{to}}",
++        "appLine": "TizenTube app: {{from}} → {{to}}",
++        "explain": "Ask Claude to rebuild the package with your changes and install it with Apps2Samsung.",
++        "explainAndroid": "Ask Claude to rebuild the APK with your changes and install it on your device.",
++        "ok": {
++            "title": "OK",
++            "subtitle": "Don't show again for this version"
++        },
++        "later": {
++            "title": "Remind me tomorrow",
++            "subtitle": "Show this again in a day"
++        },
++        "upToDate": {
++            "title": "TizenTube is up to date",
++            "subtitle": "No newer version than yours has been released."
++        },
++        "checkFailed": {
++            "title": "Update check failed",
++            "subtitle": "Check your internet connection and try again later."
++        }
+     }
+-}
++}
+\ No newline at end of file
+diff --git a/mods/translations/resources/pl.json b/mods/translations/resources/pl.json
+index 09b760a..9c04b3d 100644
+--- a/mods/translations/resources/pl.json
++++ b/mods/translations/resources/pl.json
+@@ -69,7 +69,7 @@
+                 "options": {
+                     "showLocalSubtitle": "Pokaż lokalne napisy",
+                     "showHiddenSubtitles": "Pokaż ukryte napisy",
+-                    "persistCaptionStyle": "Remember Caption Style"
++                    "persistCaptionStyle": "Zapamiętaj styl napisów"
+                 }
+             },
+             "videoPlayer": {
+@@ -84,6 +84,9 @@
+                             "showSuperThxBtn": "Pokaż przycisk Super Podziękowania",
+                             "showAIAskBtn": "Pokaż przycisk Zapytaj",
+                             "showSpeedCtrlBtn": "Pokaż przycisk kontroli prędkości",
++                            "showScreenOffBtn": "Pokaż przycisk wyłączania ekranu",
++                            "showAudioBtn": "Pokaż przycisk dźwięku",
++                            "showQualityBtn": "Pokaż przycisk jakości",
+                             "addMPBtn": "Pokaż przycisk miniodtwarzacza",
+                             "swapMPWithPIP": "Zamień miniodtwarzacz na PiP"
+                         }
+@@ -107,7 +110,10 @@
+                     },
+                     "codecAny": "Dowolny",
+                     "qualityAuto": "Automatyczna",
+-                    "hideRelatedVideosPlayer": "Hide Related Videos"
++                    "hideRelatedVideosPlayer": "Ukryj powiązane filmy",
++                    "autoPlayAfterSeek": "Odtwarzaj po przewinięciu",
++                    "pauseOnFirstOk": "Pauza jednym kliknięciem OK",
++                    "screenOffPassKeys": "Głośność i przewijanie nie włączają ekranu"
+                 }
+             },
+             "time": {
+@@ -178,24 +184,24 @@
+                             "enableClock": "Włącz zegar",
+                             "isClock12HourFormat": "Format 12-godzinny",
+                             "clockShowSeconds": "Pokaż sekundy",
+-                            "clockHideWhenVideoPlaying": "Hide Clock While Video is Playing"
++                            "clockHideWhenVideoPlaying": "Ukryj zegar podczas odtwarzania"
+                         }
+                     },
+-                    "disableEnlargingThumbnails": "Disable Enlarged Thumbnails",
+-                    "enableShrinkingThumbnails": "Enable Shrinked Thumbnails",
++                    "disableEnlargingThumbnails": "Wyłącz powiększanie miniatur",
++                    "enableShrinkingThumbnails": "Włącz pomniejszone miniatury",
+                     "sortSidebarContents": {
+-                        "title": "Sort Sidebar Contents",
+-                        "subtitle": "Reorder sidebar contents to your preference",
++                        "title": "Kolejność menu bocznego",
++                        "subtitle": "Ustaw elementy menu bocznego w wybranej kolejności",
+                         "moveUp": {
+-                            "title": "Move Up",
+-                            "subtitle": "Move this item up in the sidebar"
++                            "title": "Przesuń w górę",
++                            "subtitle": "Przesuń ten element wyżej w menu bocznym"
+                         },
+                         "moveDown": {
+-                            "title": "Move Down",
+-                            "subtitle": "Move this item down in the sidebar"
++                            "title": "Przesuń w dół",
++                            "subtitle": "Przesuń ten element niżej w menu bocznym"
+                         },
+-                        "addToSidebar": "Add Channel to Sidebar",
+-                        "removeFromSidebar": "Remove Channel from Sidebar"
++                        "addToSidebar": "Dodaj kanał do menu bocznego",
++                        "removeFromSidebar": "Usuń kanał z menu bocznego"
+                     }
+                 }
+             },
+@@ -225,8 +231,8 @@
+                     "subtitle": "Używasz już najnowszej wersji ({{version}}) TizenTube Cobalt."
+                 },
+                 "checkFailed": {
+-                    "title": "TizenTube update check failed",
+-                    "subtitle": "Could not check for updates."
++                    "title": "Nie udało się sprawdzić aktualizacji TizenTube",
++                    "subtitle": "Sprawdzanie aktualizacji nie powiodło się."
+                 },
+                 "downloading": {
+                     "title": "Aktualizacja TizenTube",
+@@ -259,8 +265,8 @@
+     "sponsorblock": {
+         "segments": {
+             "sponsor": "segment sponsorowany",
+-            "intro": "intro",
+-            "outro": "outro",
++            "intro": "wstęp",
++            "outro": "zakończenie",
+             "interaction": "przypomnienie o interakcji",
+             "selfpromo": "autopromocja",
+             "preview": "podsumowanie lub zapowiedź",
+@@ -287,46 +293,93 @@
+         "next": "Następny",
+         "withTizenTube": "Za pomocą TizenTube",
+         "share": {
+-            "title": "Share",
+-            "button": "Share",
+-            "qrCodeScanMessage": "Scan the QR code below to share this video."
++            "title": "Udostępnij",
++            "button": "Udostępnij",
++            "qrCodeScanMessage": "Zeskanuj poniższy kod QR, aby udostępnić ten film."
++        },
++        "screenOff": "Wyłącz ekran",
++        "audioSettings": {
++            "title": "Dźwięk",
++            "unavailable": "Ustawienia dźwięku są niedostępne dla tego filmu.",
++            "notFound": "Nie znaleziono pozycji Dźwięk w menu ustawień.",
++            "openOnce": "Otwórz raz menu ustawień (zębatka) i spróbuj ponownie."
++        },
++        "qualitySettings": {
++            "title": "Jakość",
++            "unavailable": "Ustawienia jakości są niedostępne dla tego filmu."
++        },
++        "submenu": {
++            "notFound": "Nie znaleziono tej pozycji w menu ustawień.",
++            "openOnce": "Otwórz raz menu ustawień (zębatka) i spróbuj ponownie."
+         },
+-        "screenOff": "Turn off screen",
+         "chapters": {
+-            "title": "Chapters",
+-            "enterNudge": "To view chapters, press the up arrow button",
+-            "navNudge": "Navigate between chapters",
+-            "navNudgeA11y": "Press the left or right arrow button to navigate between chapters"
++            "title": "Rozdziały",
++            "enterNudge": "Aby zobaczyć rozdziały, naciśnij strzałkę w górę",
++            "navNudge": "Przechodź między rozdziałami",
++            "navNudgeA11y": "Naciśnij strzałkę w lewo lub w prawo, aby przechodzić między rozdziałami"
+         },
+         "queue": {
+-            "title": "Queued Videos",
+-            "clear": "Clear Queue"
++            "title": "Kolejka filmów",
++            "clear": "Wyczyść kolejkę"
+         },
+         "subtitles": {
+-            "otherLanguages": "Other Languages"
++            "otherLanguages": "Inne języki"
+         }
+     },
+     "toasts": {
+         "videoAddedToQueue": "Dodano film do kolejki",
+         "videoQueueCleared": "Kolejka została wyczyszczona.",
+         "sidebarContentsUpdated": {
+-            "title": "Sidebar Contents Updated",
+-            "subtitle": "The sidebar contents have been updated."
++            "title": "Zaktualizowano menu boczne",
++            "subtitle": "Zawartość menu bocznego została zaktualizowana."
+         },
+-        "feedbackSent": "Feedback sent."
++        "feedbackSent": "Opinia wysłana."
+     },
+     "videoMenu": {
+-        "notInterested": "Not interested",
+-        "dontRecommendChannel": "Don't recommend channel",
+-        "play": "Play",
+-        "saveToWatchLater": "Save to Watch Later",
+-        "removeFromWatchLater": "Remove from Watch Later",
+-        "saveToPlaylist": "Save to Playlist",
+-        "addToQueue": "Add to Queue",
+-        "goToChannel": "Go To Channel",
+-        "videoOptions": "Video options"
++        "notInterested": "Nie interesuje mnie to",
++        "dontRecommendChannel": "Nie polecaj kanału",
++        "play": "Odtwórz",
++        "saveToWatchLater": "Zapisz w Do obejrzenia",
++        "removeFromWatchLater": "Usuń z Do obejrzenia",
++        "saveToPlaylist": "Zapisz na playliście",
++        "addToQueue": "Dodaj do kolejki",
++        "goToChannel": "Przejdź do kanału",
++        "videoOptions": "Opcje filmu"
+     },
+     "common": {
+-        "back": "Back"
++        "back": "Wstecz"
++    },
++    "localUpdate": {
++        "menu": {
++            "title": "Aktualizacje TizenTube",
++            "subtitle": "Powiadomienia o nowych wersjach",
++            "versionSubtitle": "Twoja wersja: skrypt {{script}}, aplikacja {{app}}",
++            "checkNow": "Sprawdź teraz",
++            "checkOnStartup": "Sprawdzaj przy uruchomieniu"
++        },
++        "available": {
++            "title": "Jest nowa wersja TizenTube",
++            "subtitle": "Twoja wersja z dodatkowymi przyciskami nie aktualizuje się sama"
++        },
++        "scriptLine": "Skrypt TizenTube: {{from}} → {{to}}",
++        "appLine": "Aplikacja TizenTube: {{from}} → {{to}}",
++        "explain": "Napisz do Claude, żeby zbudował nową paczkę z Twoimi zmianami, i zainstaluj ją przez Apps2Samsung.",
++        "explainAndroid": "Napisz do Claude, żeby zbudował nowy plik APK z Twoimi zmianami, i zainstaluj go na urządzeniu.",
++        "ok": {
++            "title": "OK",
++            "subtitle": "Nie pokazuj więcej dla tej wersji"
++        },
++        "later": {
++            "title": "Przypomnij jutro",
++            "subtitle": "Pokaż ten komunikat ponownie za dzień"
++        },
++        "upToDate": {
++            "title": "TizenTube jest aktualne",
++            "subtitle": "Autor nie wydał nowszej wersji niż Twoja."
++        },
++        "checkFailed": {
++            "title": "Nie udało się sprawdzić aktualizacji",
++            "subtitle": "Sprawdź połączenie z internetem i spróbuj później."
++        }
+     }
+ }
+\ No newline at end of file
+diff --git a/mods/ui/customUI.js b/mods/ui/customUI.js
+index baddfc9..e2863b9 100644
+--- a/mods/ui/customUI.js
++++ b/mods/ui/customUI.js
+@@ -67,15 +67,27 @@ function applyPatches() {
+ 
+         if (!settingActionGroup) return inst;
+ 
++        const origSettingActionGroupCapture = inst[settingActionGroup];
++        inst[settingActionGroup] = function () {
++            const res = origSettingActionGroupCapture.apply(this, arguments);
++            try {
++                const gear = Array.isArray(res) && res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS');
++                if (gear) window.__ttPlaybackSettingsButton = gear;
++            } catch (e) { }
++            return res;
++        };
++
+         const origSettingActionGroup = inst[settingActionGroup];
+-        if (configRead('enableMPButton')) {
+-            inst[settingActionGroup] = function () {
+-                const res = origSettingActionGroup.apply(this, arguments);
+-                const idx = res.findIndex(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS');
+-                res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP') || res.splice(idx, 0, pipCommand);
+-                return res;
+-            };
+-        }
++        inst[settingActionGroup] = function () {
++            const res = origSettingActionGroup.apply(this, arguments);
++            if (!Array.isArray(res)) return res;
++            if (!configRead('enableMPButton')) {
++                return res.filter(item => item.type !== 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP');
++            }
++            const idx = res.findIndex(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PLAYBACK_SETTINGS');
++            res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_PIP') || res.splice(idx, 0, pipCommand);
++            return res;
++        };
+ 
+         const previousButtonName = functions.find(func => {
+             if (func.rhs.includes('skipNextButton')) {
+@@ -99,10 +111,14 @@ function applyPatches() {
+ 
+         const engagementActionButton = functions.find(func => func.rhs.includes('props.data.engagementActions')).left.split('.')[1];
+ 
+-        if (engagementActionButton && configRead('enableSpeedControlsButton')) {
++        if (engagementActionButton) {
+             const origEngagementActionButton = inst[engagementActionButton];
+             inst[engagementActionButton] = function () {
+                 const res = origEngagementActionButton.apply(this, arguments);
++                if (!Array.isArray(res)) return res;
++                if (!configRead('enableSpeedControlsButton')) {
++                    return res.filter(item => item.type !== 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED');
++                }
+                 res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED') || res.push({
+                     type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_SPEED',
+                     button: {
+@@ -123,6 +139,82 @@ function applyPatches() {
+             }
+         }
+ 
++        // Przycisk "Wylacz ekran" bezposrednio na pasku odtwarzacza.
++        // Uzywa tej samej akcji SCREEN_OFF co pozycja w menu ustawien odtwarzania.
++        if (engagementActionButton) {
++            const origEngagementActionButtonSO = inst[engagementActionButton];
++            inst[engagementActionButton] = function () {
++                const res = origEngagementActionButtonSO.apply(this, arguments);
++                if (!Array.isArray(res) || !configRead('enableScreenOffButton')) return res;
++                res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_SCREEN_OFF') || res.push({
++                    type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_SCREEN_OFF',
++                    button: {
++                        buttonRenderer: ButtonRenderer(
++                            false,
++                            t('player.screenOff'),
++                            'EYE_OFF',
++                            {
++                                customAction: {
++                                    action: 'SCREEN_OFF'
++                                }
++                            }
++                        )
++                    }
++                });
++                return res;
++            }
++        }
++
++        // Przycisk "Dzwiek" (sciezka dzwiekowa) na pasku odtwarzacza.
++        // Przycisk "Jakosc" na pasku odtwarzacza.
++        if (engagementActionButton) {
++            const origEngagementActionButtonQuality = inst[engagementActionButton];
++            inst[engagementActionButton] = function () {
++                const res = origEngagementActionButtonQuality.apply(this, arguments);
++                if (!Array.isArray(res) || !configRead('enableQualityButton')) return res;
++                res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_QUALITY') || res.push({
++                    type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_QUALITY',
++                    button: {
++                        buttonRenderer: ButtonRenderer(
++                            false,
++                            t('player.qualitySettings.title'),
++                            configRead('ttQualityIconType') || 'VIDEO_QUALITY',
++                            {
++                                customAction: {
++                                    action: 'TT_QUALITY_SETTINGS'
++                                }
++                            }
++                        )
++                    }
++                });
++                return res;
++            }
++        }
++
++        if (engagementActionButton) {
++            const origEngagementActionButtonAudio = inst[engagementActionButton];
++            inst[engagementActionButton] = function () {
++                const res = origEngagementActionButtonAudio.apply(this, arguments);
++                if (!Array.isArray(res) || !configRead('enableAudioButton')) return res;
++                res.find(item => item.type === 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_AUDIO') || res.push({
++                    type: 'TRANSPORT_CONTROLS_BUTTON_TYPE_TT_AUDIO',
++                    button: {
++                        buttonRenderer: ButtonRenderer(
++                            false,
++                            t('player.audioSettings.title'),
++                            configRead('ttAudioIconType') || 'TRANSLATE',
++                            {
++                                customAction: {
++                                    action: 'TT_AUDIO_SETTINGS'
++                                }
++                            }
++                        )
++                    }
++                });
++                return res;
++            }
++        }
++
+         if (!configRead('enableSuperThanksButton')) {
+             const origEngagementActionButton = inst[engagementActionButton];
+             inst[engagementActionButton] = function () {
+@@ -183,8 +275,22 @@ function applyPatches() {
+ }
+ 
+ 
+-if (document.readyState === 'complete' || document.readyState === 'interactive') {
++// Cobalt (Tizen 6+) nigdy nie wysyla DOMContentLoaded: readyState przechodzi
++// z 'loading' od razu na 'complete'. Startujemy wiec od razu albo na
++// DOMContentLoaded / load, cokolwiek przyjdzie pierwsze, i tylko raz.
++let customUIStarted = false;
++function startCustomUI() {
++    if (customUIStarted) return;
++    customUIStarted = true;
+     applyPatches();
++}
++
++if (document.readyState === 'complete' || document.readyState === 'interactive') {
++    startCustomUI();
+ } else {
+-    window.addEventListener('DOMContentLoaded', applyPatches);
++    window.addEventListener('DOMContentLoaded', startCustomUI);
++    document.addEventListener('DOMContentLoaded', startCustomUI);
++    window.addEventListener('load', startCustomUI);
++    // Zapas na wypadek, gdyby nie przyszlo zadne zdarzenie
++    setTimeout(startCustomUI, 3000);
+ }
+\ No newline at end of file
+diff --git a/mods/ui/settings.js b/mods/ui/settings.js
+index 34c07a4..965867c 100644
+--- a/mods/ui/settings.js
++++ b/mods/ui/settings.js
+@@ -1,4 +1,5 @@
+ import { configRead } from '../config.js';
++import { LOCAL_BASE } from '../features/localUpdateNotice.js';
+ import { showModal, buttonItem, overlayPanelItemListRenderer, scrollPaneRenderer, overlayMessageRenderer, QrCodeRenderer } from './ytUI.js';
+ import qrcode from 'qrcode-npm';
+ import { t } from 'i18next';
+@@ -367,6 +368,21 @@ export default function modernUI(update, parameters) {
+                             icon: 'SLOW_MOTION_VIDEO',
+                             value: 'enableSpeedControlsButton'
+                         },
++                        {
++                            name: t('settings.options.videoPlayer.options.patching.options.showScreenOffBtn'),
++                            icon: 'EYE_OFF',
++                            value: 'enableScreenOffButton'
++                        },
++                        {
++                            name: t('settings.options.videoPlayer.options.patching.options.showAudioBtn'),
++                            icon: 'TRANSLATE',
++                            value: 'enableAudioButton'
++                        },
++                        {
++                            name: t('settings.options.videoPlayer.options.patching.options.showQualityBtn'),
++                            icon: 'VIDEO_QUALITY',
++                            value: 'enableQualityButton'
++                        },
+                         {
+                             name: t('settings.options.videoPlayer.options.patching.options.addMPBtn'),
+                             icon: 'CLEAR_COOKIES',
+@@ -420,6 +436,21 @@ export default function modernUI(update, parameters) {
+                     icon: 'VISIBILITY_OFF',
+                     value: 'hideRelatedVideosPlayer'
+                 },
++                {
++                    name: t('settings.options.videoPlayer.options.autoPlayAfterSeek'),
++                    icon: 'SLOW_MOTION_VIDEO',
++                    value: 'enableAutoPlayAfterSeek'
++                },
++                {
++                    name: t('settings.options.videoPlayer.options.pauseOnFirstOk'),
++                    icon: 'SLOW_MOTION_VIDEO',
++                    value: 'enablePauseOnFirstOk'
++                },
++                {
++                    name: t('settings.options.videoPlayer.options.screenOffPassKeys'),
++                    icon: 'EYE_OFF',
++                    value: 'enableScreenOffPassKeys'
++                },
+                 {
+                     name: t('settings.options.videoPlayer.options.preferredVideoCodec.title'),
+                     icon: 'VIDEO_QUALITY',
+@@ -766,7 +797,7 @@ export default function modernUI(update, parameters) {
+                 }
+             ]
+         },
+-        window.h5vcc && window.h5vcc.tizentube ?
++        false ?
+             {
+                 name: t('settings.options.updater.title'),
+                 icon: 'SYSTEM_UPDATE',
+@@ -794,7 +825,34 @@ export default function modernUI(update, parameters) {
+                         value: 'enableUpdater'
+                     }
+                 ]
+-            } : null
++            } : {
++                name: t('localUpdate.menu.title'),
++                icon: 'SYSTEM_UPDATE',
++                value: null,
++                menuHeader: {
++                    title: t('localUpdate.menu.title'),
++                    subtitle: t('localUpdate.menu.subtitle')
++                },
++                subtitle: t('localUpdate.menu.versionSubtitle', { script: LOCAL_BASE.script, app: LOCAL_BASE.app }),
++                options: [
++                    buttonItem(
++                        { title: t('localUpdate.menu.checkNow') },
++                        { icon: 'SYSTEM_UPDATE' },
++                        [
++                            {
++                                customAction: {
++                                    action: 'TT_LOCAL_UPDATE_CHECK',
++                                }
++                            }
++                        ]
++                    ),
++                    {
++                        name: t('localUpdate.menu.checkOnStartup'),
++                        icon: 'SYSTEM_UPDATE',
++                        value: 'enableLocalUpdateNotice'
++                    }
++                ]
++            }
+     ];
+ 
+     const buttons = [];
+diff --git a/mods/ui/ui.js b/mods/ui/ui.js
+index 52f7547..b9286a0 100644
+--- a/mods/ui/ui.js
++++ b/mods/ui/ui.js
+@@ -143,6 +143,17 @@ function execute_once_dom_loaded() {
+     });
+   } catch (e) { }
+ 
++  // Przy wylaczonym ekranie glosnosc i przewijanie nie wlaczaja ekranu (jak w SmartTube).
++  // Tizen: 447/448/449 glosnosc, 412/417 przewijanie; Android (Cobalt): 173/174/175 glosnosc, 227/228 przewijanie.
++  const SCREEN_OFF_PASS_KEYS = [37, 39, 412, 417, 227, 228, 447, 448, 449, 173, 174, 175];
++  const SCREEN_OFF_PASS_NAMES = ['ArrowLeft', 'ArrowRight', 'MediaRewind', 'MediaFastForward',
++    'AudioVolumeUp', 'AudioVolumeDown', 'AudioVolumeMute', 'VolumeUp', 'VolumeDown', 'VolumeMute'];
++  const keepsScreenOff = (evt) => {
++    if (evt.__ttSynthetic) return true; // nasze wlasne OK z "Odtwarzaj po przewinieciu"
++    if (!configRead('enableScreenOffPassKeys')) return false;
++    return SCREEN_OFF_PASS_KEYS.indexOf(evt.keyCode) !== -1 || SCREEN_OFF_PASS_NAMES.indexOf(evt.key) !== -1;
++  };
++
+   var eventHandler = (evt) => {
+     // We handle key events ourselves.
+     console.info(
+@@ -161,7 +172,7 @@ function execute_once_dom_loaded() {
+ 
+     const container = document.getElementById('container');
+ 
+-    if (window.screenTurnedOffAt && Date.now() - window.screenTurnedOffAt > 1000) {
++    if (window.screenTurnedOffAt && Date.now() - window.screenTurnedOffAt > 1000 && !keepsScreenOff(evt)) {
+       for (const child of document.body.children) {
+         if (child.tagName.toLowerCase() === 'script' || child.tagName.toLowerCase() === 'svg') continue;
+ 
+diff --git a/mods/userScript.js b/mods/userScript.js
+index f8a9c6e..6ef9659 100644
+--- a/mods/userScript.js
++++ b/mods/userScript.js
+@@ -18,6 +18,9 @@ import "./ui/disableWhosWatching.js";
+ import "./features/moreSubtitles.js";
+ import "./features/captionStylePersistence.js";
+ import "./features/updater.js";
++import "./features/localUpdateNotice.js";
++import "./features/autoPlayAfterSeek.js";
++import "./features/pauseOnFirstOk.js";
+ import "./features/pictureInPicture.js";
+ import "./features/preferredVideoQuality.js";
+ import "./features/videoQueuing.js";

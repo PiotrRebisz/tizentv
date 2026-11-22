@@ -47,7 +47,7 @@ Zamiast pliku APK można użyć **Obtainium** (wtedy Apps2Samsung sam się aktua
 
 Będzie potrzebny w kroku 2.
 
-**Ustawienia → Wi-Fi (lub Połączenia → Wi-Fi) → kliknij swoją sieć (ikona zębatki) → Adres IP**, np. `192.168.86.50`.
+**Ustawienia → Wi-Fi (lub Połączenia → Wi-Fi) → kliknij swoją sieć (ikona zębatki) → Adres IP**, np. `192.168.1.10`.
 
 > Wskazówka: w routerze można przypisać telefonowi stały adres IP (rezerwacja DHCP). Wtedy nie trzeba zmieniać ustawień telewizora przy każdej instalacji.
 
@@ -59,7 +59,7 @@ Będzie potrzebny w kroku 2.
 2. Będąc w **Aplikacjach**, wpisz na pilocie **`12345`**. Jeśli pilot nie ma cyfr, użyj przycisku **123** i wpisz cyfry na ekranie.
 3. Pojawi się okno **Developer mode**:
    - przestaw **Developer mode** na **On**,
-   - w polu **Host PC IP** wpisz **adres IP telefonu** z kroku 1 (normalnie, np. `192.168.86.50`),
+   - w polu **Host PC IP** wpisz **adres IP telefonu** z kroku 1 (normalnie, np. `192.168.1.10`),
    - zatwierdź **OK**.
 4. **Uruchom telewizor ponownie**: przytrzymaj przycisk zasilania na pilocie, aż zobaczysz logo Samsunga.
 
